@@ -29,6 +29,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.stream.IntStream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -39,7 +41,7 @@ public class CalculateAverage_godofwharf {
     private static final int NCPU = Runtime.getRuntime().availableProcessors();
 
     // This array is used for quick conversion of fractional part
-    private static final double[] DOUBLES = new double[]{ 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 };
+    private static final double[] DOUBLES = new double[]{0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
     // This array is used for quick conversion from ASCII to digit
     private static final int[] DIGIT_LOOKUP = new int[]{
             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -47,7 +49,7 @@ public class CalculateAverage_godofwharf {
             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
             -1, -1, -1, -1, -1, -1, -1, -1, 0, 1,
-            2, 3, 4, 5, 6, 7, 8, 9, -1, -1 };
+            2, 3, 4, 5, 6, 7, 8, 9, -1, -1};
     private static final int MAX_STR_LEN = 108;
     private static final int DEFAULT_HASH_TBL_SIZE = 4096;
     private static final int DEFAULT_PAGE_SIZE = 8_388_608; // 8 MB
@@ -73,6 +75,13 @@ public class CalculateAverage_godofwharf {
         return job.sort();
     }
 
+    private static void printDebugMessage(final String message,
+                                          final Object... args) {
+        if (DEBUG) {
+            System.err.printf(message, args);
+        }
+    }
+
     public static class Job {
         private final int nThreads;
         private final State[] threadLocalStates;
@@ -85,6 +94,143 @@ public class CalculateAverage_godofwharf {
                     .forEach(i -> threadLocalStates[i] = new State());
             this.nThreads = nThreads;
             this.executorService = Executors.newFixedThreadPool(nThreads);
+        }
+
+        private static LineMetadata findNextOccurrenceOfNewLine(final ByteBuffer buffer,
+                                                                final int capacity,
+                                                                final int offset) {
+            int maxLen = capacity - offset;
+            byte[] src = new byte[Math.min(MAX_STR_LEN, maxLen)];
+            byte[] station = new byte[src.length];
+            byte[] temperature = new byte[5];
+            buffer.position(offset);
+            buffer.get(src);
+            int i = 0;
+            int j = 0;
+            int k = 0;
+            boolean isAscii = true;
+            boolean afterDelim = false;
+            int hashCode = 0;
+            for (; i < src.length; i++) {
+                byte b = src[i];
+                if (b < 0) {
+                    isAscii = false;
+                }
+                if (!afterDelim && b != '\n') {
+                    if (b == ';') {
+                        afterDelim = true;
+                    } else {
+                        hashCode = hashCode * 31 + b;
+                        station[j++] = b;
+                    }
+                } else if (b != '\n') {
+                    temperature[k++] = b;
+                } else {
+                    return new LineMetadata(
+                            station, temperature, j, k, offset + i + 1, hashCode, isAscii);
+                }
+            }
+            if (i == 0 & j == 0 && k == 0) {
+                hashCode = -1;
+            }
+            return new LineMetadata(
+                    station, temperature, j, k, offset + i, hashCode, isAscii);
+        }
+
+        private static void processPage(final byte[] page,
+                                        final int pageLen,
+                                        final State state) {
+            int j = 0;
+            while (j < pageLen) {
+                long h1 = 1;
+                long h2 = 1;
+                int k = j;
+                while (k < pageLen && page[k] != ';') {
+                    h1 = h1 * 31 + page[k];
+                    h2 = h2 * 109 + page[k];
+                    k++;
+                }
+                int temperatureLen = 5;
+                if (page[k + 4] == '\n') {
+                    temperatureLen = 3;
+                } else if (page[k + 5] == '\n') {
+                    temperatureLen = 4;
+                }
+                byte[] b = new byte[k - j];
+                System.arraycopy(page, j, b, 0, k - j);
+                Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), h1, h2);
+                state.update(m);
+                j = k + temperatureLen + 2;
+            }
+        }
+
+        private static List<Split> breakFileIntoSplits(final RandomAccessFile file,
+                                                       final int splitLength,
+                                                       final int pageLength,
+                                                       final MemorySegment memorySegment,
+                                                       final boolean enableChecks)
+                throws IOException {
+            final List<Split> splits = new ArrayList<>();
+            // Try to break the file into multiple splits while ensuring that each split has at least splitLength bytes
+            // and ends with '\n' or EOF
+            for (long i = 0; i < file.length(); ) {
+                long splitStartOffset = i;
+                long splitEndOffset = Math.min(file.length(), splitStartOffset + splitLength); // not inclusive
+                if (splitEndOffset == file.length()) { // reached EOF
+                    List<Page> pages = breakSplitIntoPages(splitStartOffset, splitEndOffset, pageLength, memorySegment, enableChecks);
+                    splits.add(new Split(splitStartOffset, splitEndOffset - splitStartOffset, pages));
+                    break;
+                }
+                // Look past the end offset to find next '\n' or EOF
+                long segmentLength = Math.min(MAX_STR_LEN, file.length() - i);
+                // Create a new memory segment for reading contents beyond splitEndOffset
+                MemorySegment lookahead = memorySegment.asSlice(splitEndOffset, segmentLength);
+                ByteBuffer bb = lookahead.asByteBuffer();
+                // Find the next offset which has either '\n' or EOF
+                LineMetadata lineMetadata = findNextOccurrenceOfNewLine(bb, (int) segmentLength, 0);
+                splitEndOffset += lineMetadata.offset;
+                if (enableChecks &&
+                        memorySegment.asSlice(splitEndOffset - 1, 1).asByteBuffer().get(0) != '\n') {
+                    throw new IllegalStateException("Page doesn't end with NL char");
+                }
+                // Break the split further into multiple pages based on pageLength
+                List<Page> pages = breakSplitIntoPages(splitStartOffset, splitEndOffset, pageLength, memorySegment, enableChecks);
+                splits.add(new Split(splitStartOffset, splitEndOffset - splitStartOffset, pages));
+                i = splitEndOffset;
+                lookahead.unload();
+            }
+            return splits;
+        }
+
+        private static List<Page> breakSplitIntoPages(final long splitStartOffset,
+                                                      final long splitEndOffset,
+                                                      final int pageLength,
+                                                      final MemorySegment memorySegment,
+                                                      final boolean enableChecks) {
+            List<Page> pages = new ArrayList<>();
+            for (long i = splitStartOffset; i < splitEndOffset; ) {
+                long pageStartOffset = i;
+                long pageEndOffset = Math.min(splitEndOffset, pageStartOffset + pageLength); // not inclusive
+                if (pageEndOffset == splitEndOffset) {
+                    pages.add(new Page(pageStartOffset, pageEndOffset - pageStartOffset));
+                    break;
+                }
+                // Look past the end offset to find next '\n' till we reach the end of split
+                long lookaheadLength = Math.min(MAX_STR_LEN, splitEndOffset - i);
+                MemorySegment lookahead = memorySegment.asSlice(pageEndOffset, lookaheadLength);
+                ByteBuffer bb = lookahead.asByteBuffer();
+                // Find next offset which has either '\n' or the end of split
+                LineMetadata lineMetadata = findNextOccurrenceOfNewLine(bb, (int) lookaheadLength, 0);
+                pageEndOffset += lineMetadata.offset;
+                if (enableChecks &&
+                        memorySegment.asSlice(pageEndOffset - 1, 1).asByteBuffer().get(0) != '\n') {
+                    throw new IllegalStateException("Page doesn't end with NL char");
+                }
+                pages.add(new Page(pageStartOffset, pageEndOffset - pageStartOffset));
+                i = pageEndOffset;
+                lookahead.unload();
+            }
+            return pages;
         }
 
         public void compute(final String path) throws Exception {
@@ -141,8 +287,7 @@ public class CalculateAverage_godofwharf {
                 globalMap.compute(k.toString(), (ignored, agg) -> {
                     if (agg == null) {
                         agg = v;
-                    }
-                    else {
+                    } else {
                         agg.merge(v);
                     }
                     return agg;
@@ -156,178 +301,45 @@ public class CalculateAverage_godofwharf {
             printDebugMessage("Tree map construction took %d ns%n", (System.nanoTime() - time));
             return sortedMap;
         }
-
-        private static LineMetadata findNextOccurrenceOfNewLine(final ByteBuffer buffer,
-                                                                final int capacity,
-                                                                final int offset) {
-            int maxLen = capacity - offset;
-            byte[] src = new byte[Math.min(MAX_STR_LEN, maxLen)];
-            byte[] station = new byte[src.length];
-            byte[] temperature = new byte[5];
-            buffer.position(offset);
-            buffer.get(src);
-            int i = 0;
-            int j = 0;
-            int k = 0;
-            boolean isAscii = true;
-            boolean afterDelim = false;
-            int hashCode = 0;
-            for (; i < src.length; i++) {
-                byte b = src[i];
-                if (b < 0) {
-                    isAscii = false;
-                }
-                if (!afterDelim && b != '\n') {
-                    if (b == ';') {
-                        afterDelim = true;
-                    }
-                    else {
-                        hashCode = hashCode * 31 + b;
-                        station[j++] = b;
-                    }
-                }
-                else if (b != '\n') {
-                    temperature[k++] = b;
-                }
-                else {
-                    return new LineMetadata(
-                            station, temperature, j, k, offset + i + 1, hashCode, isAscii);
-                }
-            }
-            if (i == 0 & j == 0 && k == 0) {
-                hashCode = -1;
-            }
-            return new LineMetadata(
-                    station, temperature, j, k, offset + i, hashCode, isAscii);
-        }
-
-        private static void processPage(final byte[] page,
-                                        final int pageLen,
-                                        final State state) {
-            int j = 0;
-            while (j < pageLen) {
-                int hashcode = 1;
-                int k = j;
-                while (k < pageLen && page[k] != ';') {
-                    hashcode = hashcode * 31 + page[k];
-                    k++;
-                }
-                int temperatureLen = 5;
-                if (page[k + 4] == '\n') {
-                    temperatureLen = 3;
-                }
-                else if (page[k + 5] == '\n') {
-                    temperatureLen = 4;
-                }
-                byte[] b = new byte[k - j];
-                System.arraycopy(page, j, b, 0, k - j);
-                Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), hashcode);
-                state.update(m);
-                j = k + temperatureLen + 2;
-            }
-        }
-
-        private static List<Split> breakFileIntoSplits(final RandomAccessFile file,
-                                                       final int splitLength,
-                                                       final int pageLength,
-                                                       final MemorySegment memorySegment,
-                                                       final boolean enableChecks)
-                throws IOException {
-            final List<Split> splits = new ArrayList<>();
-            // Try to break the file into multiple splits while ensuring that each split has at least splitLength bytes
-            // and ends with '\n' or EOF
-            for (long i = 0; i < file.length();) {
-                long splitStartOffset = i;
-                long splitEndOffset = Math.min(file.length(), splitStartOffset + splitLength); // not inclusive
-                if (splitEndOffset == file.length()) { // reached EOF
-                    List<Page> pages = breakSplitIntoPages(splitStartOffset, splitEndOffset, pageLength, memorySegment, enableChecks);
-                    splits.add(new Split(splitStartOffset, splitEndOffset - splitStartOffset, pages));
-                    break;
-                }
-                // Look past the end offset to find next '\n' or EOF
-                long segmentLength = Math.min(MAX_STR_LEN, file.length() - i);
-                // Create a new memory segment for reading contents beyond splitEndOffset
-                MemorySegment lookahead = memorySegment.asSlice(splitEndOffset, segmentLength);
-                ByteBuffer bb = lookahead.asByteBuffer();
-                // Find the next offset which has either '\n' or EOF
-                LineMetadata lineMetadata = findNextOccurrenceOfNewLine(bb, (int) segmentLength, 0);
-                splitEndOffset += lineMetadata.offset;
-                if (enableChecks &&
-                        memorySegment.asSlice(splitEndOffset - 1, 1).asByteBuffer().get(0) != '\n') {
-                    throw new IllegalStateException("Page doesn't end with NL char");
-                }
-                // Break the split further into multiple pages based on pageLength
-                List<Page> pages = breakSplitIntoPages(splitStartOffset, splitEndOffset, pageLength, memorySegment, enableChecks);
-                splits.add(new Split(splitStartOffset, splitEndOffset - splitStartOffset, pages));
-                i = splitEndOffset;
-                lookahead.unload();
-            }
-            return splits;
-        }
-
-        private static List<Page> breakSplitIntoPages(final long splitStartOffset,
-                                                      final long splitEndOffset,
-                                                      final int pageLength,
-                                                      final MemorySegment memorySegment,
-                                                      final boolean enableChecks) {
-            List<Page> pages = new ArrayList<>();
-            for (long i = splitStartOffset; i < splitEndOffset;) {
-                long pageStartOffset = i;
-                long pageEndOffset = Math.min(splitEndOffset, pageStartOffset + pageLength); // not inclusive
-                if (pageEndOffset == splitEndOffset) {
-                    pages.add(new Page(pageStartOffset, pageEndOffset - pageStartOffset));
-                    break;
-                }
-                // Look past the end offset to find next '\n' till we reach the end of split
-                long lookaheadLength = Math.min(MAX_STR_LEN, splitEndOffset - i);
-                MemorySegment lookahead = memorySegment.asSlice(pageEndOffset, lookaheadLength);
-                ByteBuffer bb = lookahead.asByteBuffer();
-                // Find next offset which has either '\n' or the end of split
-                LineMetadata lineMetadata = findNextOccurrenceOfNewLine(bb, (int) lookaheadLength, 0);
-                pageEndOffset += lineMetadata.offset;
-                if (enableChecks &&
-                        memorySegment.asSlice(pageEndOffset - 1, 1).asByteBuffer().get(0) != '\n') {
-                    throw new IllegalStateException("Page doesn't end with NL char");
-                }
-                pages.add(new Page(pageStartOffset, pageEndOffset - pageStartOffset));
-                i = pageEndOffset;
-                lookahead.unload();
-            }
-            return pages;
-        }
     }
 
     public static class State {
-        private final Map<AggregationKey, MeasurementAggregator> state;
+        private final FastHashMap2 state;
 
         public State() {
-            this.state = new HashMap<>(DEFAULT_HASH_TBL_SIZE);
+            this.state = new FastHashMap2(DEFAULT_HASH_TBL_SIZE);
             // insert a DUMMY key to prime the hashmap for usage
-            AggregationKey dummy = new AggregationKey("DUMMY".getBytes(UTF_8), -1);
-            this.state.put(dummy, null);
-            this.state.remove(dummy);
+//            AggregationKey dummy = new AggregationKey("DUMMY".getBytes(UTF_8), -1, -1);
+//            this.state.put(dummy, null);
+//            this.state.remove(dummy);
         }
 
         public void update(final Measurement m) {
-            MeasurementAggregator agg = state.get(m.aggregationKey);
-            if (agg == null) {
-                state.put(m.aggregationKey, new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L));
-                return;
-            }
-            agg.count++;
-            agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
-            agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
-            agg.sum += m.temperature;
+            state.compute(m.aggregationKey, (ignored, agg) -> {
+                if (agg == null) {
+                    agg = new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L);
+                } else {
+                    agg.count++;
+                    agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
+                    agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
+                    agg.sum += m.temperature;
+                }
+                return agg;
+            });
+
         }
 
         public static class AggregationKey {
             private final byte[] station;
-            private final int hashCode;
+            private final long h1;
+            private final long h2;
 
             public AggregationKey(final byte[] station,
-                                  final int hashCode) {
+                                  final long h1,
+                                  final long h2) {
                 this.station = station;
-                this.hashCode = hashCode;
+                this.h1 = h1;
+                this.h2 = h2;
             }
 
             @Override
@@ -337,7 +349,7 @@ public class CalculateAverage_godofwharf {
 
             @Override
             public int hashCode() {
-                return hashCode;
+                return (int) (h1 & 0xFFFFFFFFL);
             }
 
             @Override
@@ -346,7 +358,7 @@ public class CalculateAverage_godofwharf {
                     return false;
                 }
                 AggregationKey sk = (AggregationKey) other;
-                return station.length == sk.station.length && Arrays.mismatch(station,  sk.station) < 0;
+                return station.length == sk.station.length && Arrays.mismatch(station, sk.station) < 0;
             }
         }
     }
@@ -408,29 +420,24 @@ public class CalculateAverage_godofwharf {
                     int decimal = toDigit(ch0);
                     double fractional = DOUBLES[toDigit(ch2)];
                     return decimal + fractional;
-                }
-                else if (len == 4) {
+                } else if (len == 4) {
                     // -1.2 or 11.2
                     int decimal = (ch0 == '-' ? toDigit(ch1) : (fastMul10(toDigit(ch0)) + toDigit(ch1)));
                     double fractional = DOUBLES[toDigit(ch3)];
                     if (ch0 == '-') {
                         return Math.negateExact(decimal) - fractional;
-                    }
-                    else {
+                    } else {
                         return decimal + fractional;
                     }
-                }
-                else {
+                } else {
                     int decimal = fastMul10(toDigit(ch1)) + toDigit(ch2);
                     double fractional = DOUBLES[toDigit(ch4)];
                     return Math.negateExact(decimal) - fractional;
                 }
-            }
-            catch (ArrayIndexOutOfBoundsException e) {
+            } catch (ArrayIndexOutOfBoundsException e) {
                 printDebugMessage("Array index out of bounds for string: %s%n", new String(b, 0, len));
                 throw new RuntimeException(e);
-            }
-            catch (StringIndexOutOfBoundsException e) {
+            } catch (StringIndexOutOfBoundsException e) {
                 printDebugMessage("String index out of bounds for string: %s%n", new String(b, 0, len));
                 throw new RuntimeException(e);
             }
@@ -440,16 +447,15 @@ public class CalculateAverage_godofwharf {
     // record classes
     record Measurement(byte[] station,
                        double temperature,
-                       int hash,
                        State.AggregationKey aggregationKey) {
 
-    public Measurement(byte[] station,
-                       double temperature,
-                       int hash) {
+        public Measurement(byte[] station,
+                           double temperature,
+                           long h1,
+                           long h2) {
             this(station,
                     temperature,
-                    hash,
-                    new State.AggregationKey(station, hash));
+                    new State.AggregationKey(station, h1, h2));
         }
 
     }
@@ -468,10 +474,116 @@ public class CalculateAverage_godofwharf {
     record Page(long offset, long length) {
     }
 
-    private static void printDebugMessage(final String message,
-                                          final Object... args) {
-        if (DEBUG) {
-            System.err.printf(message, args);
+    //     A simple implementation of HashMap which only supports compute and forEach methods
+    //     This implementation is faster than Java's HashMap implementation because it uses open addressing (double hashing to be specific)
+    //     to resolve collisions.
+    public static class FastHashMap2 {
+        private TableEntry[] tableEntries;
+        private int size;
+
+        public FastHashMap2(final int size) {
+            this.size = size;
+            this.tableEntries = new TableEntry[size + 10];
         }
+
+        public void compute(final State.AggregationKey key,
+                            final BiFunction<State.AggregationKey, MeasurementAggregator, MeasurementAggregator> function) {
+            int idx = mod(key.h1, size);
+            // either find the corresponding entry if it exists (update) or find an empty slot for creating a new entry (insert)
+            idx = probe(idx, key);
+            TableEntry entry = tableEntries[idx];
+            if (entry != null) {
+                // update
+                entry.aggregator = function.apply(key, entry.aggregator);
+            } else {
+                // insert
+                tableEntries[idx] = new TableEntry(key, function.apply(key, null));
+            }
+        }
+
+        public void forEach(final BiConsumer<State.AggregationKey, MeasurementAggregator> action) {
+            for (int i = 0; i < size; i++) {
+                TableEntry entry = tableEntries[i];
+                if (entry != null) {
+                    action.accept(entry.key, entry.aggregator);
+                }
+            }
+        }
+
+        private int mod(final long a,
+                        final long b) {
+            return (int) (a & b);
+        }
+
+        // This method tries to find the next possible idx in hash table which either contains no entry or contains
+        // the key we are looking for
+        // h1 - primary hashcode of key
+        // h2 - secondary hashcode of key
+        private int probe(final int idx,
+                          final State.AggregationKey key) {
+            // if we find an empty slot, return immediately
+            if (tableEntries[idx] == null) {
+                return idx;
+            }
+            // we found a non-empty slot
+            // check if we can use it
+            // to check if a key exists in map, we compare both the hash codes and then check for key equality
+            // boolean exists = tableEntries[idx].key.hashCodes[0] == key.hashCodes[0] &&
+            // tableEntries[idx].key.hashCodes[1] == key.hashCodes[1] &&
+            // tableEntries[idx].key.equals(key);
+            boolean exists =
+                    tableEntries[idx].key.h1 == key.h1 &&
+                            tableEntries[idx].key.h2 == key.h2 &&
+                            tableEntries[idx].key.equals(key);
+            if (exists) {
+                return idx;
+            }
+
+            // we need to search for other slots (empty/non-empty)
+            // update curIdx to the next slot
+            int attempts = 1;
+            int nextIdx = size - mod(idx + attempts * key.h2, size);
+
+            // iterate until we find a slot which meets any of the following criteria
+            // - slot is empty
+            // - slot is non-empty but
+            // - h1 doesn't match with key (or)
+            // - h1 matches but h2 doesn't match with key (or)
+            // - h1 and h2 match but station name doesn't match
+            while (nextIdx != idx &&
+                    tableEntries[nextIdx] != null &&
+                    (tableEntries[nextIdx].key.h1 != key.h1 ||
+                            tableEntries[nextIdx].key.h2 != key.h2) ||
+                            !tableEntries[nextIdx].key.equals(key)) {
+                // tableEntries[nextIdx].key.hashCodes[0] != key.hashCodes[0] ||
+                // tableEntries[nextIdx].key.hashCodes[1] != key.hashCodes[1] ||
+                // !tableEntries[nextIdx].key.equals(key
+                // System.out.println("Collision between two strings [Existing key = %s, Given key = %s, h1/h1 = %d/%d, h2 = %d/%d]".formatted(
+                // tableEntries[nextIdx].key.toString(), key.toString(), tableEntries[nextIdx].key.hashCodes[0], key.hashCodes[0],
+                // tableEntries[nextIdx].key.hashCodes[1], key.hashCodes[1]));
+                attempts++;
+                nextIdx = size - mod(idx + (attempts * (long) key.h2), size);
+            }
+            // if (attempts > 1) {
+            // System.out.printf("Probe tries = %d%n", attempts);
+            // }
+            // if curIdx matches the idx we started with, then a cycle has occurred
+            if (nextIdx == idx) {
+                throw new IllegalStateException("Probe failed because we can't find slot for key");
+            }
+            return nextIdx;
+        }
+
+        public static class TableEntry {
+            State.AggregationKey key;
+            MeasurementAggregator aggregator;
+
+            public TableEntry(final State.AggregationKey key,
+                              final MeasurementAggregator aggregator) {
+                this.key = key;
+                this.aggregator = aggregator;
+            }
+        }
+
     }
 }
