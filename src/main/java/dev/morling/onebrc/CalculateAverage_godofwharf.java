@@ -228,7 +228,7 @@ public class CalculateAverage_godofwharf {
                 else if (page[k + 5] == '\n') {
                     temperatureLen = 4;
                 }
-                Measurement m = new Measurement(b,  NumberUtils.parseDouble2(page, k + 1, temperatureLen), hashcode);
+                Measurement m = new Measurement(b, k - j, NumberUtils.parseDouble2(page, k + 1, temperatureLen), hashcode);
                 state.update(m);
                 j = k + temperatureLen + 2;
             }
@@ -310,7 +310,7 @@ public class CalculateAverage_godofwharf {
         public State() {
             this.state = new HashMap<>(DEFAULT_HASH_TBL_SIZE);
             // insert a DUMMY key to prime the hashmap for usage
-            AggregationKey dummy = new AggregationKey("DUMMY".getBytes(UTF_8), -1);
+            AggregationKey dummy = new AggregationKey("DUMMY".getBytes(UTF_8), -1, -1);
             this.state.put(dummy, null);
             this.state.remove(dummy);
         }
@@ -462,7 +462,7 @@ public class CalculateAverage_godofwharf {
                     len,
                     temperature,
                     hash,
-                    new State.AggregationKey(station, hash));
+                    new State.AggregationKey(station, len, hash));
         }
 
     }
