@@ -16,9 +16,6 @@ package dev.morling.onebrc;
  *  limitations under the License.
  */
 
-import jdk.incubator.vector.Vector;
-import jdk.incubator.vector.VectorSpecies;
-
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.lang.foreign.Arena;
@@ -41,9 +38,6 @@ public class CalculateAverage_godofwharf {
     private static final boolean DEBUG = Boolean.parseBoolean(System.getProperty("debug", "false"));
     private static final int NCPU = Runtime.getRuntime().availableProcessors();
 
-    private static final VectorSpecies<Byte> PREFERRED_SPECIES = VectorSpecies.ofPreferred(byte.class);
-
-    private static final Vector<Byte> NEW_LINE_VEC = PREFERRED_SPECIES.broadcast('\n');
     // This array is used for quick conversion of fractional part
     private static final double[] DOUBLES = new double[]{ 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 };
     // This array is used for quick conversion from ASCII to digit
@@ -472,34 +466,6 @@ public class CalculateAverage_godofwharf {
     }
 
     record Page(long offset, long length) {
-    }
-
-    public static class SearchResult {
-        private int[] offsets;
-        private int len;
-
-        public SearchResult(final int[] offsets,
-                            final int len) {
-            this.offsets = offsets;
-            this.len = len;
-        }
-    }
-
-    public static class SearchResult2 {
-        private byte[] station;
-        private double temperature;
-        private int hashcode;
-        private int len;
-
-        public SearchResult2(final byte[] station,
-                             final int hashcode,
-                             final double temperature,
-                             final int len) {
-            this.station = station;
-            this.hashcode = hashcode;
-            this.temperature = temperature;
-            this.len = len;
-        }
     }
 
     private static void printDebugMessage(final String message,
