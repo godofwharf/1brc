@@ -33,7 +33,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.function.BiConsumer;
 import java.util.stream.IntStream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -129,32 +128,8 @@ public class CalculateAverage_godofwharf {
                                     // this byte buffer should end with '\n' or EOF
                                     MemorySegment segment = globalSegment.asSlice(page.offset, page.length);
                                     MemorySegment.copy(segment, ValueLayout.JAVA_BYTE, 0L, currentPage, 0, (int) page.length);
-                                    SearchResult searchResult = findLines(currentPage, (int) page.length);
-                                    int prevOffset = 0;
-                                    int j = 0;
                                     // iterate over search results
-                                    while (j < searchResult.len) {
-                                        int curOffset = searchResult.offsets[j];
-                                        byte ch1 = currentPage[curOffset - 4];
-                                        byte ch2 = currentPage[curOffset - 5];
-                                        int temperatureLen = 5;
-                                        if (ch1 == ';') {
-                                            temperatureLen = 3;
-                                        }
-                                        else if (ch2 == ';') {
-                                            temperatureLen = 4;
-                                        }
-                                        int lineLength = curOffset - prevOffset;
-                                        int stationLen = lineLength - temperatureLen - 1;
-                                        byte[] station = new byte[stationLen];
-                                        System.arraycopy(currentPage, prevOffset, station, 0, stationLen);
-                                        int hashcode = Arrays.hashCode(station);
-                                        double temperature = NumberUtils.parseDouble2(currentPage, prevOffset + stationLen + 1, temperatureLen);
-                                        Measurement m = new Measurement(station, temperature, hashcode);
-                                        threadLocalStates[tid].update(m);
-                                        prevOffset = curOffset + 1;
-                                        j++;
-                                    }
+                                    processPage(currentPage, (int) page.length, threadLocalStates[tid]);
                                     // Explicitly commented out because unload seems to take a lot of time
                                     // segment.unload();
                                 }
@@ -233,20 +208,30 @@ public class CalculateAverage_godofwharf {
                     station, temperature, j, k, offset + i, hashCode, isAscii);
         }
 
-        private static SearchResult findLines(final byte[] page,
-                                              final int pageLen) {
-            SearchResult ret = new SearchResult(new int[pageLen / 5], 0);
-            int i = 0;
+        private static void processPage(final byte[] page,
+                                        final int pageLen,
+                                        final State state) {
             int j = 0;
             while (j < pageLen) {
-                while (j < pageLen && page[j] != '\n') {
-                    j++;
+                int hashcode = 1;
+                int k = j;
+                while (k < pageLen && page[k] != ';') {
+                    hashcode = hashcode * 31 + page[k];
+                    k++;
                 }
-                ret.offsets[i++] = j;
-                j++;
+                int temperatureLen = 5;
+                if (page[k + 4] == '\n') {
+                    temperatureLen = 3;
+                }
+                else if (page[k + 5] == '\n') {
+                    temperatureLen = 4;
+                }
+                byte[] b = new byte[k - j];
+                System.arraycopy(page, j, b, 0, k - j);
+                Measurement m = new Measurement(b,  NumberUtils.parseDouble2(page, k + 1, temperatureLen), hashcode);
+                state.update(m);
+                j = k + temperatureLen + 2;
             }
-            ret.len = i;
-            return ret;
         }
 
         private static SearchResult findNewLinesVectorized(final byte[] page,
@@ -591,6 +576,23 @@ public class CalculateAverage_godofwharf {
         public SearchResult(final int[] offsets,
                             final int len) {
             this.offsets = offsets;
+            this.len = len;
+        }
+    }
+
+    public static class SearchResult2 {
+        private byte[] station;
+        private double temperature;
+        private int hashcode;
+        private int len;
+
+        public SearchResult2(final byte[] station,
+                             final int hashcode,
+                             final double temperature,
+                             final int len) {
+            this.station = station;
+            this.hashcode = hashcode;
+            this.temperature = temperature;
             this.len = len;
         }
     }
