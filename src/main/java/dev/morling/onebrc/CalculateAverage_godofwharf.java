@@ -314,18 +314,16 @@ public class CalculateAverage_godofwharf {
         }
 
         public void update(final Measurement m) {
-            state.compute(m.aggregationKey, (ignored, agg) -> {
-                if (agg == null) {
-                    agg = new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L);
-                } else {
-                    agg.count++;
-                    agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
-                    agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
-                    agg.sum += m.temperature;
-                }
-                return agg;
-            });
-
+            FastHashMap2.TableEntry entry = state.compute(m.aggregationKey);
+            MeasurementAggregator agg = entry.aggregator;
+            if (agg == null) {
+                entry.aggregator = new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L);
+                return;
+            }
+            agg.count++;
+            agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
+            agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
+            agg.sum += m.temperature;
         }
 
         public static class AggregationKey {
@@ -483,19 +481,15 @@ public class CalculateAverage_godofwharf {
             this.probeInterval = 7;
         }
 
-        public void compute(final State.AggregationKey key,
-                            final BiFunction<State.AggregationKey, MeasurementAggregator, MeasurementAggregator> function) {
+        public TableEntry compute(final State.AggregationKey key) {
             int idx = mod(key.h1, size - 1);
             // either find the corresponding entry if it exists (update) or find an empty slot for creating a new entry (insert)
             idx = probe(idx, key);
             TableEntry entry = tableEntries[idx];
-            if (entry != null) {
-                // update
-                entry.aggregator = function.apply(key, entry.aggregator);
-            } else {
-                // insert
-                tableEntries[idx] = new TableEntry(key, function.apply(key, null));
+            if (entry == null) {
+                tableEntries[idx] = new TableEntry(key, null);
             }
+            return tableEntries[idx];
         }
 
         public void forEach(final BiConsumer<State.AggregationKey, MeasurementAggregator> action) {
