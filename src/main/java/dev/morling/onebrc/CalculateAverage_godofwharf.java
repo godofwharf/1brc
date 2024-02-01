@@ -142,7 +142,6 @@ public class CalculateAverage_godofwharf {
             int j = 0;
             while (j < pageLen) {
                 long h1 = 1;
-                long h2 = 1;
                 int k = j;
                 while (k < pageLen && page[k] != ';') {
                     h1 = h1 * 31 + page[k];
@@ -157,7 +156,7 @@ public class CalculateAverage_godofwharf {
                 byte[] b = new byte[k - j];
                 System.arraycopy(page, j, b, 0, k - j);
                 Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), h1);
-                state.update(m);
+                state.map.update(m.aggregationKey, m);
                 j = k + temperatureLen + 2;
             }
         }
@@ -281,7 +280,7 @@ public class CalculateAverage_godofwharf {
         }
 
         private void mergeInternal(final State state) {
-            state.state.forEach((k, v) -> {
+            state.map.forEach((k, v) -> {
                 globalMap.compute(k.toString(), (ignored, agg) -> {
                     if (agg == null) {
                         agg = v;
@@ -302,27 +301,10 @@ public class CalculateAverage_godofwharf {
     }
 
     public static class State {
-        private final FastHashMap2 state;
+        public FastHashMap2 map;
 
         public State() {
-            this.state = new FastHashMap2(DEFAULT_HASH_TBL_SIZE);
-            // insert a DUMMY key to prime the hashmap for usage
-//            AggregationKey dummy = new AggregationKey("DUMMY".getBytes(UTF_8), -1, -1);
-//            this.state.put(dummy, null);
-//            this.state.remove(dummy);
-        }
-
-        public void update(final Measurement m) {
-            FastHashMap2.TableEntry entry = state.compute(m.aggregationKey);
-            MeasurementAggregator agg = entry.aggregator;
-            if (agg == null) {
-                entry.aggregator = new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L);
-                return;
-            }
-            agg.count++;
-            agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
-            agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
-            agg.sum += m.temperature;
+            this.map = new FastHashMap2(DEFAULT_HASH_TBL_SIZE);
         }
 
         public static class AggregationKey {
@@ -467,7 +449,7 @@ public class CalculateAverage_godofwharf {
     }
 
     //     A simple implementation of HashMap which only supports compute and forEach methods
-    //     This implementation is faster than Java's HashMap implementation because it uses open addressing (double hashing to be specific)
+    //     This implementation should ideally be faster than Java's HashMap implementation because it uses open addressing (double hashing to be specific)
     //     to resolve collisions.
     public static class FastHashMap2 {
         private TableEntry[] tableEntries;
@@ -480,20 +462,36 @@ public class CalculateAverage_godofwharf {
             this.probeInterval = 7;
         }
 
-        public TableEntry compute(final State.AggregationKey k2) {
-            int idx = (int) (k2.h1 & (size - 1));
+        public void update(final State.AggregationKey k,
+                           final Measurement m) {
+            int idx = (int) (k.h1 & (size - 1));
             // if we find an empty slot, claim the same and return immediately
             if (tableEntries[idx] == null) {
-                tableEntries[idx] = new TableEntry(k2, null);
-                return tableEntries[idx];
+                tableEntries[idx] = new TableEntry(k,
+                        new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L));
+                return;
             }
             State.AggregationKey k1 = tableEntries[idx].key;
             // match found
-            if (k1.h1 == k2.h1 && k1.station.length == k2.station.length && k1.equals(k2)) {
-                return tableEntries[idx];
+            if (k1.h1 == k.h1 && k1.station.length == k.station.length && k1.equals(k)) {
+                MeasurementAggregator agg = tableEntries[idx].aggregator;
+                agg.count++;
+                agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
+                agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
+                agg.sum += m.temperature;
+                return;
             }
+            FastHashMap2.TableEntry entry = computeSlow(m.aggregationKey, idx);
+            MeasurementAggregator agg = entry.aggregator;
+            if (agg == null) {
+                entry.aggregator = new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L);
+            }
+        }
+
+        public TableEntry computeSlow(final State.AggregationKey k2,
+                                      int idx) {
             // either find the corresponding entry if it exists (update) or find an empty slot for creating a new entry (insert)
-            idx = updateSlow(idx, k2);
+            idx = probe(idx, k2);
             TableEntry entry = tableEntries[idx];
             if (entry == null) {
                 tableEntries[idx] = new TableEntry(k2, null);
@@ -510,8 +508,8 @@ public class CalculateAverage_godofwharf {
             }
         }
 
-        private int updateSlow(final int idx,
-                               final State.AggregationKey k2) {
+        private int probe(final int idx,
+                          final State.AggregationKey k2) {
 
             // we need to search for other slots (empty/non-empty)
             // update curIdx to the next slot
