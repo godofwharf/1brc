@@ -16,7 +16,6 @@ package dev.morling.onebrc;
  *  limitations under the License.
  */
 
-import jdk.incubator.vector.ByteVector;
 import jdk.incubator.vector.Vector;
 import jdk.incubator.vector.VectorSpecies;
 
@@ -215,11 +214,9 @@ public class CalculateAverage_godofwharf {
             while (j < pageLen) {
                 int hashcode = 1;
                 int k = j;
-                byte[] b = new byte[128];
-                int l = 0;
                 while (k < pageLen && page[k] != ';') {
                     hashcode = hashcode * 31 + page[k];
-                    b[l++] = page[k++];
+                    k++;
                 }
                 int temperatureLen = 5;
                 if (page[k + 4] == '\n') {
@@ -228,7 +225,9 @@ public class CalculateAverage_godofwharf {
                 else if (page[k + 5] == '\n') {
                     temperatureLen = 4;
                 }
-                Measurement m = new Measurement(b, k - j, NumberUtils.parseDouble2(page, k + 1, temperatureLen), hashcode);
+                byte[] b = new byte[k - j];
+                System.arraycopy(page, j, b, 0, k - j);
+                Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), hashcode);
                 state.update(m);
                 j = k + temperatureLen + 2;
             }
@@ -310,7 +309,7 @@ public class CalculateAverage_godofwharf {
         public State() {
             this.state = new HashMap<>(DEFAULT_HASH_TBL_SIZE);
             // insert a DUMMY key to prime the hashmap for usage
-            AggregationKey dummy = new AggregationKey("DUMMY".getBytes(UTF_8), -1, -1);
+            AggregationKey dummy = new AggregationKey("DUMMY".getBytes(UTF_8), -1);
             this.state.put(dummy, null);
             this.state.remove(dummy);
         }
@@ -329,20 +328,17 @@ public class CalculateAverage_godofwharf {
 
         public static class AggregationKey {
             private final byte[] station;
-            private final int len;
             private final int hashCode;
 
             public AggregationKey(final byte[] station,
-                                  final int len,
                                   final int hashCode) {
                 this.station = station;
-                this.len = len;
                 this.hashCode = hashCode;
             }
 
             @Override
             public String toString() {
-                return new String(station, 0, len, UTF_8);
+                return new String(station, UTF_8);
             }
 
             @Override
@@ -356,7 +352,7 @@ public class CalculateAverage_godofwharf {
                     return false;
                 }
                 AggregationKey sk = (AggregationKey) other;
-                return station.length == sk.station.length && Arrays.mismatch(station, 0, len, sk.station, 0, len) < 0;
+                return station.length == sk.station.length && Arrays.mismatch(station,  sk.station) < 0;
             }
         }
     }
@@ -449,20 +445,17 @@ public class CalculateAverage_godofwharf {
 
     // record classes
     record Measurement(byte[] station,
-                       int len,
                        double temperature,
                        int hash,
                        State.AggregationKey aggregationKey) {
 
     public Measurement(byte[] station,
-                       int len,
                        double temperature,
                        int hash) {
             this(station,
-                    len,
                     temperature,
                     hash,
-                    new State.AggregationKey(station, len, hash));
+                    new State.AggregationKey(station, hash));
         }
 
     }
