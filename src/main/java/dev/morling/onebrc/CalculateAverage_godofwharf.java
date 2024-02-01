@@ -215,9 +215,11 @@ public class CalculateAverage_godofwharf {
             while (j < pageLen) {
                 int hashcode = 1;
                 int k = j;
+                byte[] b = new byte[128];
+                int l = 0;
                 while (k < pageLen && page[k] != ';') {
                     hashcode = hashcode * 31 + page[k];
-                    k++;
+                    b[l++] = page[k++];
                 }
                 int temperatureLen = 5;
                 if (page[k + 4] == '\n') {
@@ -226,106 +228,10 @@ public class CalculateAverage_godofwharf {
                 else if (page[k + 5] == '\n') {
                     temperatureLen = 4;
                 }
-                byte[] b = new byte[k - j];
-                System.arraycopy(page, j, b, 0, k - j);
                 Measurement m = new Measurement(b,  NumberUtils.parseDouble2(page, k + 1, temperatureLen), hashcode);
                 state.update(m);
                 j = k + temperatureLen + 2;
             }
-        }
-
-        private static SearchResult findNewLinesVectorized(final byte[] page,
-                                                           final int pageLen) {
-            SearchResult ret = new SearchResult(new int[pageLen / 5], 0);
-            VectorSpecies<Byte> species = PREFERRED_SPECIES;
-            int loopBound = pageLen - species.length() * 4;
-            int i = 0;
-            int j = 0;
-            while (j < loopBound) {
-                Vector<Byte> v1 = ByteVector.fromArray(species, page, j);
-                Vector<Byte> v2 = ByteVector.fromArray(species, page, j + species.length());
-                Vector<Byte> v3 = ByteVector.fromArray(species, page, j + species.length() * 2);
-                Vector<Byte> v4 = ByteVector.fromArray(species, page, j + species.length() * 3);
-                long l1 = NEW_LINE_VEC.eq(v1).toLong();
-                long l2 = NEW_LINE_VEC.eq(v2).toLong();
-                long l3 = NEW_LINE_VEC.eq(v3).toLong();
-                long l4 = NEW_LINE_VEC.eq(v4).toLong();
-                long r1 = l1 & 0xFFFFFFFFL | (l2 << species.length());
-                long r2 = l3 & 0xFFFFFFFFL | (l4 << (species.length()));
-                int b1 = Long.bitCount(r1);
-                int b2 = Long.bitCount(r2);
-                int k = i;
-                int it = b1;
-                while (it > 0) {
-                    int idx = Long.numberOfTrailingZeros(r1);
-                    ret.offsets[k++] = j + idx;
-                    r1 &= (r1 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r1);
-                    ret.offsets[k++] = j + idx;
-                    r1 &= (r1 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r1);
-                    ret.offsets[k++] = j + idx;
-                    r1 &= (r1 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r1);
-                    ret.offsets[k++] = j + idx;
-                    r1 &= (r1 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r1);
-                    ret.offsets[k++] = j + idx;
-                    r1 &= (r1 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r1);
-                    ret.offsets[k++] = j + idx;
-                    r1 &= (r1 - 1);
-                    it--;
-                }
-                i += b1;
-                j += species.length() * 2;
-                k = i;
-                it = b2;
-                while (it > 0) {
-                    int idx = Long.numberOfTrailingZeros(r2);
-                    ret.offsets[k++] = j + idx;
-                    r2 &= (r2 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r2);
-                    ret.offsets[k++] = j + idx;
-                    r2 &= (r2 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r2);
-                    ret.offsets[k++] = j + idx;
-                    r2 &= (r2 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r2);
-                    ret.offsets[k++] = j + idx;
-                    r2 &= (r2 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r2);
-                    ret.offsets[k++] = j + idx;
-                    r2 &= (r2 - 1);
-                    it--;
-                    idx = Long.numberOfTrailingZeros(r2);
-                    ret.offsets[k++] = j + idx;
-                    r2 &= (r2 - 1);
-                    it--;
-                }
-                i += b2;
-                j += species.length() * 2;
-            }
-
-            // tail loop
-            while (j < pageLen) {
-                byte b = page[j];
-                if (b == '\n') {
-                    ret.offsets[i++] = j;
-                }
-                j++;
-            }
-            ret.len = i;
-            return ret;
         }
 
         private static List<Split> breakFileIntoSplits(final RandomAccessFile file,
@@ -423,17 +329,20 @@ public class CalculateAverage_godofwharf {
 
         public static class AggregationKey {
             private final byte[] station;
+            private final int len;
             private final int hashCode;
 
             public AggregationKey(final byte[] station,
+                                  final int len,
                                   final int hashCode) {
                 this.station = station;
+                this.len = len;
                 this.hashCode = hashCode;
             }
 
             @Override
             public String toString() {
-                return new String(station, UTF_8);
+                return new String(station, 0, len, UTF_8);
             }
 
             @Override
@@ -447,7 +356,7 @@ public class CalculateAverage_godofwharf {
                     return false;
                 }
                 AggregationKey sk = (AggregationKey) other;
-                return station.length == sk.station.length && Arrays.mismatch(station, sk.station) < 0;
+                return station.length == sk.station.length && Arrays.mismatch(station, 0, len, sk.station, 0, len) < 0;
             }
         }
     }
@@ -540,17 +449,20 @@ public class CalculateAverage_godofwharf {
 
     // record classes
     record Measurement(byte[] station,
+                       int len,
                        double temperature,
                        int hash,
                        State.AggregationKey aggregationKey) {
 
     public Measurement(byte[] station,
+                       int len,
                        double temperature,
-                       int hashCode) {
+                       int hash) {
             this(station,
+                    len,
                     temperature,
-                    hashCode,
-                    new State.AggregationKey(station, hashCode));
+                    hash,
+                    new State.AggregationKey(station, hash));
         }
 
     }
