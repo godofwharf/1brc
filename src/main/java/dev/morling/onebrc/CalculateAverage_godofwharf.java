@@ -535,10 +535,8 @@ public class CalculateAverage_godofwharf {
             // - h1 matches but h2 doesn't match with key (or)
             // - h1 and h2 match but station name doesn't match
             while (nextIdx != idx) {
-                if (tableEntries[nextIdx] == null) {
-                    break;
-                }
-                if (tableEntries[nextIdx].key.h1 != k2.h1 ||
+                if (tableEntries[nextIdx] == null ||
+                        tableEntries[nextIdx].key.h1 != k2.h1 ||
                         tableEntries[nextIdx].key.station.length != k2.station.length ||
                         !tableEntries[nextIdx].key.equals(k2)) {
                     break;
