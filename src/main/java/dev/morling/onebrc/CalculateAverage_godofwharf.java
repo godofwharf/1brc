@@ -129,7 +129,7 @@ public class CalculateAverage_godofwharf {
                                     // this byte buffer should end with '\n' or EOF
                                     MemorySegment segment = globalSegment.asSlice(page.offset, page.length);
                                     MemorySegment.copy(segment, ValueLayout.JAVA_BYTE, 0L, currentPage, 0, (int) page.length);
-                                    SearchResult searchResult = findNewLinesVectorized(currentPage, (int) page.length);
+                                    SearchResult searchResult = findLines(currentPage, (int) page.length);
                                     int prevOffset = 0;
                                     int j = 0;
                                     // iterate over search results
@@ -231,6 +231,20 @@ public class CalculateAverage_godofwharf {
             }
             return new LineMetadata(
                     station, temperature, j, k, offset + i, hashCode, isAscii);
+        }
+
+        private static SearchResult findLines(final byte[] page,
+                                              final int pageLen) {
+            SearchResult ret = new SearchResult(new int[pageLen / 5], 0);
+            int i = 0;
+            int j = 0;
+            while (j < pageLen) {
+                while (j < pageLen && page[j] != '\n') {
+                    j++;
+                }
+                ret.offsets[i++] = j;
+            }
+            return ret;
         }
 
         private static SearchResult findNewLinesVectorized(final byte[] page,
