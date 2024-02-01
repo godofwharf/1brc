@@ -30,7 +30,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 import java.util.stream.IntStream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -481,13 +480,23 @@ public class CalculateAverage_godofwharf {
             this.probeInterval = 7;
         }
 
-        public TableEntry compute(final State.AggregationKey key) {
-            int idx = (int) (key.h1 & (size - 1));
+        public TableEntry compute(final State.AggregationKey k2) {
+            int idx = (int) (k2.h1 & (size - 1));
+            // if we find an empty slot, claim the same and return immediately
+            if (tableEntries[idx] == null) {
+                tableEntries[idx] = new TableEntry(k2, null);
+                return tableEntries[idx];
+            }
+            State.AggregationKey k1 = tableEntries[idx].key;
+            // match found
+            if (k1.h1 == k2.h1 && k1.station.length == k2.station.length && k1.equals(k2)) {
+                return tableEntries[idx];
+            }
             // either find the corresponding entry if it exists (update) or find an empty slot for creating a new entry (insert)
-            idx = probe(idx, key);
+            idx = updateSlow(idx, k2);
             TableEntry entry = tableEntries[idx];
             if (entry == null) {
-                tableEntries[idx] = new TableEntry(key, null);
+                tableEntries[idx] = new TableEntry(k2, null);
             }
             return tableEntries[idx];
         }
@@ -501,27 +510,8 @@ public class CalculateAverage_godofwharf {
             }
         }
 
-        private int mod(final long a,
-                        final long b) {
-            return (int) (a & b);
-        }
-
-        private int probe(final int idx,
-                          final State.AggregationKey k2) {
-            // if we find an empty slot, return immediately
-            if (tableEntries[idx] == null) {
-                return idx;
-            }
-
-            State.AggregationKey k1 = tableEntries[idx].key;
-
-            boolean exists =
-                    k1.h1 == k2.h1
-                        && k1.station.length == k2.station.length
-                        && k1.equals(k2);
-            if (exists) {
-                return idx;
-            }
+        private int updateSlow(final int idx,
+                               final State.AggregationKey k2) {
 
             // we need to search for other slots (empty/non-empty)
             // update curIdx to the next slot
