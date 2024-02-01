@@ -243,7 +243,9 @@ public class CalculateAverage_godofwharf {
                     j++;
                 }
                 ret.offsets[i++] = j;
+                j++;
             }
+            ret.len = i;
             return ret;
         }
 
