@@ -147,7 +147,6 @@ public class CalculateAverage_godofwharf {
                 int k = j;
                 while (k < pageLen && page[k] != ';') {
                     h1 = h1 * 31 + page[k];
-                    h2 = h2 * 109 + page[k];
                     k++;
                 }
                 int temperatureLen = 5;
@@ -158,7 +157,7 @@ public class CalculateAverage_godofwharf {
                 }
                 byte[] b = new byte[k - j];
                 System.arraycopy(page, j, b, 0, k - j);
-                Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), h1, h2);
+                Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), h1);
                 state.update(m);
                 j = k + temperatureLen + 2;
             }
@@ -332,14 +331,11 @@ public class CalculateAverage_godofwharf {
         public static class AggregationKey {
             private final byte[] station;
             private final long h1;
-            private final long h2;
 
             public AggregationKey(final byte[] station,
-                                  final long h1,
-                                  final long h2) {
+                                  final long h1) {
                 this.station = station;
                 this.h1 = h1;
-                this.h2 = h2;
             }
 
             @Override
@@ -349,7 +345,7 @@ public class CalculateAverage_godofwharf {
 
             @Override
             public int hashCode() {
-                return (int) (h1 & 0xFFFFFFFFL);
+                return (int) h1;
             }
 
             @Override
@@ -451,11 +447,10 @@ public class CalculateAverage_godofwharf {
 
         public Measurement(byte[] station,
                            double temperature,
-                           long h1,
-                           long h2) {
+                           long h1) {
             this(station,
                     temperature,
-                    new State.AggregationKey(station, h1, h2));
+                    new State.AggregationKey(station, h1));
         }
 
     }
@@ -480,10 +475,12 @@ public class CalculateAverage_godofwharf {
     public static class FastHashMap2 {
         private TableEntry[] tableEntries;
         private int size;
+        private int probeInterval;
 
         public FastHashMap2(final int size) {
             this.size = size;
             this.tableEntries = new TableEntry[size + 10];
+            this.probeInterval = 7;
         }
 
         public void compute(final State.AggregationKey key,
@@ -515,34 +512,27 @@ public class CalculateAverage_godofwharf {
             return (int) (a & b);
         }
 
-        // This method tries to find the next possible idx in hash table which either contains no entry or contains
-        // the key we are looking for
-        // h1 - primary hashcode of key
-        // h2 - secondary hashcode of key
         private int probe(final int idx,
-                          final State.AggregationKey key) {
+                          final State.AggregationKey k2) {
             // if we find an empty slot, return immediately
             if (tableEntries[idx] == null) {
                 return idx;
             }
-            // we found a non-empty slot
-            // check if we can use it
-            // to check if a key exists in map, we compare both the hash codes and then check for key equality
-            // boolean exists = tableEntries[idx].key.hashCodes[0] == key.hashCodes[0] &&
-            // tableEntries[idx].key.hashCodes[1] == key.hashCodes[1] &&
-            // tableEntries[idx].key.equals(key);
+
+            State.AggregationKey k1 = tableEntries[idx].key;
+
             boolean exists =
-                    tableEntries[idx].key.h1 == key.h1 &&
-                            tableEntries[idx].key.h2 == key.h2 &&
-                            tableEntries[idx].key.equals(key);
+                    k1.h1 == k2.h1
+                        && k1.station.length == k2.station.length
+                        && k1.equals(k2);
             if (exists) {
                 return idx;
             }
 
             // we need to search for other slots (empty/non-empty)
             // update curIdx to the next slot
-            int attempts = 1;
-            int nextIdx = size - mod(idx + attempts * key.h2, size);
+            int nextIdx = idx;
+            nextIdx = mod(nextIdx + probeInterval, size);
 
             // iterate until we find a slot which meets any of the following criteria
             // - slot is empty
@@ -552,22 +542,11 @@ public class CalculateAverage_godofwharf {
             // - h1 and h2 match but station name doesn't match
             while (nextIdx != idx &&
                     tableEntries[nextIdx] != null &&
-                    (tableEntries[nextIdx].key.h1 != key.h1 ||
-                            tableEntries[nextIdx].key.h2 != key.h2) ||
-                            !tableEntries[nextIdx].key.equals(key)) {
-                // tableEntries[nextIdx].key.hashCodes[0] != key.hashCodes[0] ||
-                // tableEntries[nextIdx].key.hashCodes[1] != key.hashCodes[1] ||
-                // !tableEntries[nextIdx].key.equals(key
-                // System.out.println("Collision between two strings [Existing key = %s, Given key = %s, h1/h1 = %d/%d, h2 = %d/%d]".formatted(
-                // tableEntries[nextIdx].key.toString(), key.toString(), tableEntries[nextIdx].key.hashCodes[0], key.hashCodes[0],
-                // tableEntries[nextIdx].key.hashCodes[1], key.hashCodes[1]));
-                attempts++;
-                nextIdx = size - mod(idx + (attempts * (long) key.h2), size);
+                    (tableEntries[nextIdx].key.h1 != k2.h1 ||
+                            tableEntries[nextIdx].key.station.length != k2.station.length) ||
+                            !tableEntries[nextIdx].key.equals(k2)) {
+                nextIdx = mod(nextIdx + probeInterval, size);
             }
-            // if (attempts > 1) {
-            // System.out.printf("Probe tries = %d%n", attempts);
-            // }
-            // if curIdx matches the idx we started with, then a cycle has occurred
             if (nextIdx == idx) {
                 throw new IllegalStateException("Probe failed because we can't find slot for key");
             }
