@@ -485,7 +485,7 @@ public class CalculateAverage_godofwharf {
 
         public void compute(final State.AggregationKey key,
                             final BiFunction<State.AggregationKey, MeasurementAggregator, MeasurementAggregator> function) {
-            int idx = mod(key.h1, size);
+            int idx = mod(key.h1, size - 1);
             // either find the corresponding entry if it exists (update) or find an empty slot for creating a new entry (insert)
             idx = probe(idx, key);
             TableEntry entry = tableEntries[idx];
@@ -532,7 +532,7 @@ public class CalculateAverage_godofwharf {
             // we need to search for other slots (empty/non-empty)
             // update curIdx to the next slot
             int nextIdx = idx;
-            nextIdx = mod(nextIdx + probeInterval, size);
+            nextIdx = mod(nextIdx + probeInterval, size - 1);
 
             // iterate until we find a slot which meets any of the following criteria
             // - slot is empty
@@ -540,12 +540,16 @@ public class CalculateAverage_godofwharf {
             // - h1 doesn't match with key (or)
             // - h1 matches but h2 doesn't match with key (or)
             // - h1 and h2 match but station name doesn't match
-            while (nextIdx != idx &&
-                    tableEntries[nextIdx] != null &&
-                    (tableEntries[nextIdx].key.h1 != k2.h1 ||
-                            tableEntries[nextIdx].key.station.length != k2.station.length) ||
-                            !tableEntries[nextIdx].key.equals(k2)) {
-                nextIdx = mod(nextIdx + probeInterval, size);
+            while (nextIdx != idx) {
+                if (tableEntries[nextIdx] == null) {
+                    break;
+                }
+                if (tableEntries[nextIdx].key.h1 != k2.h1 ||
+                        tableEntries[nextIdx].key.station.length != k2.station.length ||
+                        !tableEntries[nextIdx].key.equals(k2)) {
+                    break;
+                }
+                nextIdx = mod(nextIdx + probeInterval, size - 1);
             }
             if (nextIdx == idx) {
                 throw new IllegalStateException("Probe failed because we can't find slot for key");
