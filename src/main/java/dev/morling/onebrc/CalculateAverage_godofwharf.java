@@ -482,7 +482,7 @@ public class CalculateAverage_godofwharf {
         }
 
         public TableEntry compute(final State.AggregationKey key) {
-            int idx = mod(key.h1, size - 1);
+            int idx = (int) (key.h1 & (size - 1));
             // either find the corresponding entry if it exists (update) or find an empty slot for creating a new entry (insert)
             idx = probe(idx, key);
             TableEntry entry = tableEntries[idx];
@@ -526,7 +526,7 @@ public class CalculateAverage_godofwharf {
             // we need to search for other slots (empty/non-empty)
             // update curIdx to the next slot
             int nextIdx = idx;
-            nextIdx = mod(nextIdx + probeInterval, size - 1);
+            nextIdx = (nextIdx + probeInterval) & (size - 1);
 
             // iterate until we find a slot which meets any of the following criteria
             // - slot is empty
@@ -543,7 +543,7 @@ public class CalculateAverage_godofwharf {
                         !tableEntries[nextIdx].key.equals(k2)) {
                     break;
                 }
-                nextIdx = mod(nextIdx + probeInterval, size - 1);
+                nextIdx = (nextIdx + probeInterval) & (size - 1);
             }
             if (nextIdx == idx) {
                 throw new IllegalStateException("Probe failed because we can't find slot for key");
