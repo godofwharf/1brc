@@ -163,9 +163,9 @@ public class CalculateAverage_godofwharf {
                 int idx = (int) (h1 & (state.map.size - 1));
                 // if we find an empty slot, claim the same and return immediately
                 if (state.map.tableEntries[idx] == null) {
-                    state.map.tableEntries[idx] = new FastHashMap2.TableEntry(m.aggregationKey,
+                    state.map.tableEntries[idx] = new FastHashMap2.TableEntry(
+                            m.aggregationKey,
                             new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L));
-                    return;
                 }
                 State.AggregationKey k2 = m.aggregationKey;
                 State.AggregationKey k1 = state.map.tableEntries[idx].key;
