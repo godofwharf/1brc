@@ -490,7 +490,7 @@ public class CalculateAverage_godofwharf {
         public FastHashMap2(final int size) {
             this.size = size;
             this.tableEntries = new TableEntry[size + 10];
-            this.probeInterval = 7;
+            this.probeInterval = 1;
         }
 
         public void update(final Measurement m,
