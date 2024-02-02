@@ -40,7 +40,7 @@ public class CalculateAverage_godofwharf {
     private static final int NCPU = Runtime.getRuntime().availableProcessors();
 
     // This array is used for quick conversion of fractional part
-    private static final double[] DOUBLES = new double[]{0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9};
+    private static final double[] DOUBLES = new double[]{ 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 };
     // This array is used for quick conversion from ASCII to digit
     private static final int[] DIGIT_LOOKUP = new int[]{
             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -48,7 +48,7 @@ public class CalculateAverage_godofwharf {
             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
             -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
             -1, -1, -1, -1, -1, -1, -1, -1, 0, 1,
-            2, 3, 4, 5, 6, 7, 8, 9, -1, -1};
+            2, 3, 4, 5, 6, 7, 8, 9, -1, -1 };
     private static final int MAX_STR_LEN = 108;
     private static final int DEFAULT_HASH_TBL_SIZE = 4096;
     private static final int DEFAULT_PAGE_SIZE = 8_388_608; // 8 MB
@@ -118,13 +118,16 @@ public class CalculateAverage_godofwharf {
                 if (!afterDelim && b != '\n') {
                     if (b == ';') {
                         afterDelim = true;
-                    } else {
+                    }
+                    else {
                         hashCode = hashCode * 31 + b;
                         station[j++] = b;
                     }
-                } else if (b != '\n') {
+                }
+                else if (b != '\n') {
                     temperature[k++] = b;
-                } else {
+                }
+                else {
                     return new LineMetadata(
                             station, temperature, j, k, offset + i + 1, hashCode, isAscii);
                 }
@@ -150,13 +153,32 @@ public class CalculateAverage_godofwharf {
                 int temperatureLen = 5;
                 if (page[k + 4] == '\n') {
                     temperatureLen = 3;
-                } else if (page[k + 5] == '\n') {
+                }
+                else if (page[k + 5] == '\n') {
                     temperatureLen = 4;
                 }
                 byte[] b = new byte[k - j];
                 System.arraycopy(page, j, b, 0, k - j);
                 Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), h1);
-                state.map.update(m.aggregationKey, m);
+                int idx = (int) (h1 & (state.map.size - 1));
+                // if we find an empty slot, claim the same and return immediately
+                if (state.map.tableEntries[idx] == null) {
+                    state.map.tableEntries[idx] = new FastHashMap2.TableEntry(m.aggregationKey,
+                            new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L));
+                    return;
+                }
+                State.AggregationKey k2 = m.aggregationKey;
+                State.AggregationKey k1 = state.map.tableEntries[idx].key;
+                // match found
+                if (k1.h1 == k2.h1 && k1.station.length == m.aggregationKey.station.length && k1.equals(k2)) {
+                    MeasurementAggregator agg = state.map.tableEntries[idx].aggregator;
+                    agg.count++;
+                    agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
+                    agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
+                    agg.sum += m.temperature;
+                    return;
+                }
+                state.map.update(m, idx);
                 j = k + temperatureLen + 2;
             }
         }
@@ -170,7 +192,7 @@ public class CalculateAverage_godofwharf {
             final List<Split> splits = new ArrayList<>();
             // Try to break the file into multiple splits while ensuring that each split has at least splitLength bytes
             // and ends with '\n' or EOF
-            for (long i = 0; i < file.length(); ) {
+            for (long i = 0; i < file.length();) {
                 long splitStartOffset = i;
                 long splitEndOffset = Math.min(file.length(), splitStartOffset + splitLength); // not inclusive
                 if (splitEndOffset == file.length()) { // reached EOF
@@ -205,7 +227,7 @@ public class CalculateAverage_godofwharf {
                                                       final MemorySegment memorySegment,
                                                       final boolean enableChecks) {
             List<Page> pages = new ArrayList<>();
-            for (long i = splitStartOffset; i < splitEndOffset; ) {
+            for (long i = splitStartOffset; i < splitEndOffset;) {
                 long pageStartOffset = i;
                 long pageEndOffset = Math.min(splitEndOffset, pageStartOffset + pageLength); // not inclusive
                 if (pageEndOffset == splitEndOffset) {
@@ -284,7 +306,8 @@ public class CalculateAverage_godofwharf {
                 globalMap.compute(k.toString(), (ignored, agg) -> {
                     if (agg == null) {
                         agg = v;
-                    } else {
+                    }
+                    else {
                         agg.merge(v);
                     }
                     return agg;
@@ -395,24 +418,29 @@ public class CalculateAverage_godofwharf {
                     int decimal = toDigit(ch0);
                     double fractional = DOUBLES[toDigit(ch2)];
                     return decimal + fractional;
-                } else if (len == 4) {
+                }
+                else if (len == 4) {
                     // -1.2 or 11.2
                     int decimal = (ch0 == '-' ? toDigit(ch1) : (fastMul10(toDigit(ch0)) + toDigit(ch1)));
                     double fractional = DOUBLES[toDigit(ch3)];
                     if (ch0 == '-') {
                         return Math.negateExact(decimal) - fractional;
-                    } else {
+                    }
+                    else {
                         return decimal + fractional;
                     }
-                } else {
+                }
+                else {
                     int decimal = fastMul10(toDigit(ch1)) + toDigit(ch2);
                     double fractional = DOUBLES[toDigit(ch4)];
                     return Math.negateExact(decimal) - fractional;
                 }
-            } catch (ArrayIndexOutOfBoundsException e) {
+            }
+            catch (ArrayIndexOutOfBoundsException e) {
                 printDebugMessage("Array index out of bounds for string: %s%n", new String(b, 0, len));
                 throw new RuntimeException(e);
-            } catch (StringIndexOutOfBoundsException e) {
+            }
+            catch (StringIndexOutOfBoundsException e) {
                 printDebugMessage("String index out of bounds for string: %s%n", new String(b, 0, len));
                 throw new RuntimeException(e);
             }
@@ -424,7 +452,7 @@ public class CalculateAverage_godofwharf {
                        double temperature,
                        State.AggregationKey aggregationKey) {
 
-        public Measurement(byte[] station,
+    public Measurement(byte[] station,
                            double temperature,
                            long h1) {
             this(station,
@@ -448,9 +476,9 @@ public class CalculateAverage_godofwharf {
     record Page(long offset, long length) {
     }
 
-    //     A simple implementation of HashMap which only supports compute and forEach methods
-    //     This implementation should ideally be faster than Java's HashMap implementation because it uses open addressing (double hashing to be specific)
-    //     to resolve collisions.
+    // A simple implementation of HashMap which only supports compute and forEach methods
+    // This implementation should ideally be faster than Java's HashMap implementation because it uses open addressing (double hashing to be specific)
+    // to resolve collisions.
     public static class FastHashMap2 {
         private TableEntry[] tableEntries;
         private int size;
@@ -462,25 +490,8 @@ public class CalculateAverage_godofwharf {
             this.probeInterval = 7;
         }
 
-        public void update(final State.AggregationKey k,
-                           final Measurement m) {
-            int idx = (int) (k.h1 & (size - 1));
-            // if we find an empty slot, claim the same and return immediately
-            if (tableEntries[idx] == null) {
-                tableEntries[idx] = new TableEntry(k,
-                        new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L));
-                return;
-            }
-            State.AggregationKey k1 = tableEntries[idx].key;
-            // match found
-            if (k1.h1 == k.h1 && k1.station.length == k.station.length && k1.equals(k)) {
-                MeasurementAggregator agg = tableEntries[idx].aggregator;
-                agg.count++;
-                agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
-                agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
-                agg.sum += m.temperature;
-                return;
-            }
+        public void update(final Measurement m,
+                           final int idx) {
             FastHashMap2.TableEntry entry = computeSlow(m.aggregationKey, idx);
             MeasurementAggregator agg = entry.aggregator;
             if (agg == null) {
