@@ -160,25 +160,28 @@ public class CalculateAverage_godofwharf {
                 byte[] b = new byte[k - j];
                 System.arraycopy(page, j, b, 0, k - j);
                 Measurement m = new Measurement(b, NumberUtils.parseDouble2(page, k + 1, temperatureLen), h1);
+
                 int idx = (int) (h1 & (state.map.size - 1));
                 // if we find an empty slot, claim the same and return immediately
                 if (state.map.tableEntries[idx] == null) {
                     state.map.tableEntries[idx] = new FastHashMap2.TableEntry(
                             m.aggregationKey,
                             new MeasurementAggregator(m.temperature, m.temperature, m.temperature, 1L));
+                } else {
+                    State.AggregationKey k1 = state.map.tableEntries[idx].key;
+                    State.AggregationKey k2 = m.aggregationKey;
+                    // match found
+                    if (k1.h1 == k2.h1 && k1.station.length == m.aggregationKey.station.length && k1.equals(k2)) {
+                        MeasurementAggregator agg = state.map.tableEntries[idx].aggregator;
+                        agg.count++;
+                        agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
+                        agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
+                        agg.sum += m.temperature;
+                    } else {
+                        state.map.update(m, idx);
+                    }
                 }
-                State.AggregationKey k2 = m.aggregationKey;
-                State.AggregationKey k1 = state.map.tableEntries[idx].key;
-                // match found
-                if (k1.h1 == k2.h1 && k1.station.length == m.aggregationKey.station.length && k1.equals(k2)) {
-                    MeasurementAggregator agg = state.map.tableEntries[idx].aggregator;
-                    agg.count++;
-                    agg.min = m.temperature <= agg.min ? m.temperature : agg.min;
-                    agg.max = m.temperature >= agg.max ? m.temperature : agg.max;
-                    agg.sum += m.temperature;
-                    return;
-                }
-                state.map.update(m, idx);
+
                 j = k + temperatureLen + 2;
             }
         }
